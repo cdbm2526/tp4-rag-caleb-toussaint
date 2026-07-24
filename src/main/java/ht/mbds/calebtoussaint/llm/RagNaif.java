@@ -1,0 +1,99 @@
+package ht.mbds.calebtoussaint.llm;
+
+import dev.langchain4j.data.document.Document;
+import dev.langchain4j.data.document.DocumentSplitter;
+import dev.langchain4j.data.document.loader.ClassPathDocumentLoader;
+import dev.langchain4j.data.document.parser.apache.tika.ApacheTikaDocumentParser;
+import dev.langchain4j.data.document.splitter.DocumentSplitters;
+import dev.langchain4j.data.embedding.Embedding;
+import dev.langchain4j.data.segment.TextSegment;
+import dev.langchain4j.memory.ChatMemory;
+import dev.langchain4j.memory.chat.MessageWindowChatMemory;
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.embedding.EmbeddingModel;
+import dev.langchain4j.model.googleai.GoogleAiEmbeddingModel;
+import dev.langchain4j.model.googleai.GoogleAiGeminiChatModel;
+import dev.langchain4j.model.output.Response;
+import dev.langchain4j.rag.content.retriever.ContentRetriever;
+import dev.langchain4j.rag.content.retriever.EmbeddingStoreContentRetriever;
+import dev.langchain4j.service.AiServices;
+import dev.langchain4j.store.embedding.EmbeddingStore;
+import dev.langchain4j.store.embedding.inmemory.InMemoryEmbeddingStore;
+
+import java.time.Duration;
+import java.util.List;
+import java.util.Scanner;
+
+/**
+ * RAG "naif" : les differentes etapes du RAG sont explicites (pas cachees
+ * comme avec le RAG facile du TP2), ce qui permet de faire d'autres choix
+ * que ceux par defaut.
+ */
+public class RagNaif {
+
+    public static void main(String[] args) {
+
+        String cle = System.getenv("GEMINI_KEY");
+
+        ChatModel model = GoogleAiGeminiChatModel.builder()
+                .apiKey(cle)
+                .modelName("gemini-2.5-flash")
+                .temperature(0.7)
+                .build();
+
+        // ----- Phase 1 : enregistrement des embeddings -----
+
+        ApacheTikaDocumentParser parser = new ApacheTikaDocumentParser();
+        Document document = ClassPathDocumentLoader.loadDocument("rag.pdf", parser);
+
+        DocumentSplitter splitter = DocumentSplitters.recursive(1000, 100);
+        List<TextSegment> segments = splitter.split(document);
+
+        EmbeddingModel embeddingModel = GoogleAiEmbeddingModel.builder()
+                .apiKey(cle)
+                .modelName("gemini-embedding-001")
+                .timeout(Duration.ofSeconds(60))
+                .build();
+
+        Response<List<Embedding>> embeddingsResponse = embeddingModel.embedAll(segments);
+        List<Embedding> embeddings = embeddingsResponse.content();
+
+        EmbeddingStore<TextSegment> embeddingStore = new InMemoryEmbeddingStore<>();
+        embeddingStore.addAll(embeddings, segments);
+
+        // ----- Phase 2 : utilisation des embeddings pour repondre -----
+
+        ContentRetriever contentRetriever = EmbeddingStoreContentRetriever.builder()
+                .embeddingStore(embeddingStore)
+                .embeddingModel(embeddingModel)
+                .maxResults(2)
+                .minScore(0.5)
+                .build();
+
+        ChatMemory chatMemory = MessageWindowChatMemory.withMaxMessages(10);
+
+        Assistant assistant = AiServices.builder(Assistant.class)
+                .chatModel(model)
+                .chatMemory(chatMemory)
+                .contentRetriever(contentRetriever)
+                .build();
+
+        // Premiere question
+        String question = "Quelle est la signification de 'RAG' ; a quoi ca sert ?";
+        String reponse = assistant.chat(question);
+        System.out.println("Question : " + question);
+        System.out.println("Reponse : " + reponse);
+
+        // Boucle pour poser plusieurs questions sans recompiler
+        Scanner scanner = new Scanner(System.in);
+        while (true) {
+            System.out.print("\nVotre question (ou 'fin' pour arreter) : ");
+            String q = scanner.nextLine();
+            if (q.equalsIgnoreCase("fin")) {
+                break;
+            }
+            String r = assistant.chat(q);
+            System.out.println("Reponse : " + r);
+        }
+    }
+}
