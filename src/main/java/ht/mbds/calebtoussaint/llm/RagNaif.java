@@ -23,6 +23,9 @@ import dev.langchain4j.store.embedding.inmemory.InMemoryEmbeddingStore;
 import java.time.Duration;
 import java.util.List;
 import java.util.Scanner;
+import java.util.logging.ConsoleHandler;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * RAG "naif" : les differentes etapes du RAG sont explicites (pas cachees
@@ -31,7 +34,21 @@ import java.util.Scanner;
  */
 public class RagNaif {
 
+    /**
+     * Configure le logger sous-jacent (java.util.logging) pour afficher
+     * les details des requetes et reponses de LangChain4j.
+     */
+    private static void configureLogger() {
+        Logger packageLogger = Logger.getLogger("dev.langchain4j");
+        packageLogger.setLevel(Level.FINE);
+        ConsoleHandler handler = new ConsoleHandler();
+        handler.setLevel(Level.FINE);
+        packageLogger.addHandler(handler);
+    }
+
     public static void main(String[] args) {
+
+        configureLogger();
 
         String cle = System.getenv("GEMINI_KEY");
 
@@ -39,6 +56,7 @@ public class RagNaif {
                 .apiKey(cle)
                 .modelName("gemini-2.5-flash")
                 .temperature(0.7)
+                .logRequestsAndResponses(true)
                 .build();
 
         // ----- Phase 1 : enregistrement des embeddings -----
