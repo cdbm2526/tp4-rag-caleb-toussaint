@@ -14,9 +14,14 @@ import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.model.googleai.GoogleAiEmbeddingModel;
 import dev.langchain4j.model.googleai.GoogleAiGeminiChatModel;
 import dev.langchain4j.model.output.Response;
+import dev.langchain4j.rag.content.Content;
 import dev.langchain4j.rag.content.retriever.ContentRetriever;
 import dev.langchain4j.rag.content.retriever.EmbeddingStoreContentRetriever;
+import dev.langchain4j.rag.query.Query;
 import dev.langchain4j.service.AiServices;
+import dev.langchain4j.store.embedding.EmbeddingMatch;
+import dev.langchain4j.store.embedding.EmbeddingSearchRequest;
+import dev.langchain4j.store.embedding.EmbeddingSearchResult;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import dev.langchain4j.store.embedding.inmemory.InMemoryEmbeddingStore;
 
@@ -34,10 +39,6 @@ import java.util.logging.Logger;
  */
 public class RagNaif {
 
-    /**
-     * Configure le logger sous-jacent (java.util.logging) pour afficher
-     * les details des requetes et reponses de LangChain4j.
-     */
     private static void configureLogger() {
         Logger packageLogger = Logger.getLogger("dev.langchain4j");
         packageLogger.setLevel(Level.FINE);
@@ -79,6 +80,14 @@ public class RagNaif {
         EmbeddingStore<TextSegment> embeddingStore = new InMemoryEmbeddingStore<>();
         embeddingStore.addAll(embeddings, segments);
 
+        // --- (Optionnel) Affichage des segments enregistres dans le magasin ---
+        System.out.println("===== Segments enregistres dans le magasin d'embeddings (" + segments.size() + ") =====");
+        for (int i = 0; i < segments.size(); i++) {
+            System.out.println("--- Segment " + i + " ---");
+            System.out.println(segments.get(i).text());
+            System.out.println();
+        }
+
         // ----- Phase 2 : utilisation des embeddings pour repondre -----
 
         ContentRetriever contentRetriever = EmbeddingStoreContentRetriever.builder()
@@ -87,6 +96,32 @@ public class RagNaif {
                 .maxResults(2)
                 .minScore(0.5)
                 .build();
+
+        // --- (Optionnel) Affichage des segments retrouves pour une question donnee ---
+        String questionTest = "Quelle est la signification de 'RAG' ; a quoi ca sert ?";
+        Query query = Query.from(questionTest);
+        List<Content> contenusRetrouves = contentRetriever.retrieve(query);
+        System.out.println("===== Segments retrouves pour la question : \"" + questionTest + "\" =====");
+        for (Content c : contenusRetrouves) {
+            System.out.println("--- Segment retrouve ---");
+            System.out.println(c.textSegment().text());
+            System.out.println();
+        }
+
+        // --- (Optionnel, plus complexe) Affichage des segments avec leurs scores ---
+        Embedding questionEmbedding = embeddingModel.embed(questionTest).content();
+        EmbeddingSearchRequest searchRequest = EmbeddingSearchRequest.builder()
+                .queryEmbedding(questionEmbedding)
+                .maxResults(2)
+                .minScore(0.5)
+                .build();
+        EmbeddingSearchResult<TextSegment> searchResult = embeddingStore.search(searchRequest);
+        System.out.println("===== Segments retrouves avec leurs scores =====");
+        for (EmbeddingMatch<TextSegment> match : searchResult.matches()) {
+            System.out.println("Score : " + match.score());
+            System.out.println("Texte : " + match.embedded().text());
+            System.out.println();
+        }
 
         ChatMemory chatMemory = MessageWindowChatMemory.withMaxMessages(10);
 
