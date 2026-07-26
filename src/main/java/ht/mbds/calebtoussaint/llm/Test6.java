@@ -13,13 +13,15 @@ import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.model.googleai.GoogleAiEmbeddingModel;
 import dev.langchain4j.model.googleai.GoogleAiGeminiChatModel;
+import dev.langchain4j.model.input.Prompt;
+import dev.langchain4j.model.input.PromptTemplate;
 import dev.langchain4j.model.output.Response;
 import dev.langchain4j.rag.DefaultRetrievalAugmentor;
 import dev.langchain4j.rag.RetrievalAugmentor;
 import dev.langchain4j.rag.content.retriever.ContentRetriever;
 import dev.langchain4j.rag.content.retriever.EmbeddingStoreContentRetriever;
 import dev.langchain4j.rag.content.retriever.WebSearchContentRetriever;
-import dev.langchain4j.rag.query.router.DefaultQueryRouter;
+import dev.langchain4j.rag.query.Query;
 import dev.langchain4j.rag.query.router.QueryRouter;
 import dev.langchain4j.service.AiServices;
 import dev.langchain4j.store.embedding.EmbeddingStore;
@@ -28,7 +30,10 @@ import dev.langchain4j.web.search.WebSearchEngine;
 import dev.langchain4j.web.search.tavily.TavilyWebSearchEngine;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Scanner;
 import java.util.logging.ConsoleHandler;
 import java.util.logging.Level;
@@ -36,7 +41,10 @@ import java.util.logging.Logger;
 
 /**
  * Test 6 : combine le RAG classique (document PDF) avec une recherche sur
- * le Web (via Tavily), en utilisant les 2 sources systematiquement.
+ * le Web (via Tavily).
+ *
+ * Version corrigee (exercice bonus) : le PDF n'est utilise que si la question
+ * porte sur l'IA/le RAG ; le Web est, lui, toujours utilise.
  */
 public class Test6 {
 
@@ -102,9 +110,50 @@ public class Test6 {
                 .maxResults(3)
                 .build();
 
-        // ----- QueryRouter : les 2 ContentRetrievers sont utilises systematiquement -----
+        /*
+         * ----- Ancien code (Test 6 initial) : les 2 sources systematiquement -----
+         *
+         * Ce code fonctionnait, mais posait un probleme : meme pour une question
+         * n'ayant aucun rapport avec l'IA/le RAG (par exemple une question sur
+         * l'actualite sportive), des extraits du PDF etaient tout de meme ajoutes
+         * au prompt, consommant inutilement un appel d'embedding et polluant le
+         * prompt envoye au LM.
+         *
+         * QueryRouter queryRouter = new DefaultQueryRouter(contentRetrieverPdf, contentRetrieverWeb);
+         */
 
-        QueryRouter queryRouter = new DefaultQueryRouter(contentRetrieverPdf, contentRetrieverWeb);
+        // Template de prompt pour demander au LM si la question porte sur l'IA,
+        // avec un parametre "requete" pour la question posee par l'utilisateur.
+        PromptTemplate promptTemplate = PromptTemplate.from(
+                "Est-ce que la requete '{{requete}}' porte sur l'IA ? "
+                        + "Reponds seulement par 'oui', 'non', ou 'peut-etre'.");
+
+        // ----- Nouveau QueryRouter : le Web est toujours utilise, le PDF
+        //       seulement si la question porte sur l'IA -----
+
+        class QueryRouterPdfEtWeb implements QueryRouter {
+            @Override
+            public List<ContentRetriever> route(Query query) {
+                Map<String, Object> variables = new HashMap<>();
+                variables.put("requete", query.text());
+                Prompt prompt = promptTemplate.apply(variables);
+
+                String reponse = model.chat(prompt.text());
+                System.out.println("[QueryRouter] Question posee au LM : " + prompt.text());
+                System.out.println("[QueryRouter] Reponse du LM : " + reponse);
+
+                List<ContentRetriever> retrievers = new ArrayList<>();
+                // Le Web est toujours utilise
+                retrievers.add(contentRetrieverWeb);
+                // Le PDF n'est utilise que si la question porte sur l'IA
+                if (!reponse.toLowerCase().contains("non")) {
+                    retrievers.add(contentRetrieverPdf);
+                }
+                return retrievers;
+            }
+        }
+
+        QueryRouter queryRouter = new QueryRouterPdfEtWeb();
 
         RetrievalAugmentor retrievalAugmentor = DefaultRetrievalAugmentor.builder()
                 .queryRouter(queryRouter)
