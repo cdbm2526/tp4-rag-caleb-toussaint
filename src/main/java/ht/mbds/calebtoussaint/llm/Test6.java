@@ -13,34 +13,32 @@ import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.model.googleai.GoogleAiEmbeddingModel;
 import dev.langchain4j.model.googleai.GoogleAiGeminiChatModel;
-import dev.langchain4j.model.input.Prompt;
-import dev.langchain4j.model.input.PromptTemplate;
 import dev.langchain4j.model.output.Response;
 import dev.langchain4j.rag.DefaultRetrievalAugmentor;
 import dev.langchain4j.rag.RetrievalAugmentor;
 import dev.langchain4j.rag.content.retriever.ContentRetriever;
 import dev.langchain4j.rag.content.retriever.EmbeddingStoreContentRetriever;
-import dev.langchain4j.rag.query.Query;
+import dev.langchain4j.rag.content.retriever.WebSearchContentRetriever;
+import dev.langchain4j.rag.query.router.DefaultQueryRouter;
 import dev.langchain4j.rag.query.router.QueryRouter;
 import dev.langchain4j.service.AiServices;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import dev.langchain4j.store.embedding.inmemory.InMemoryEmbeddingStore;
+import dev.langchain4j.web.search.WebSearchEngine;
+import dev.langchain4j.web.search.tavily.TavilyWebSearchEngine;
 
 import java.time.Duration;
-import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Scanner;
 import java.util.logging.ConsoleHandler;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * Test 5 : un QueryRouter personnalise decide, question par question, s'il
- * faut faire du RAG ou non, en demandant au LLM si la question porte sur l'IA.
+ * Test 6 : combine le RAG classique (document PDF) avec une recherche sur
+ * le Web (via Tavily), en utilisant les 2 sources systematiquement.
  */
-public class Test5 {
+public class Test6 {
 
     private static void configureLogger() {
         Logger packageLogger = Logger.getLogger("dev.langchain4j");
@@ -54,23 +52,24 @@ public class Test5 {
 
         configureLogger();
 
-        String cle = System.getenv("GEMINI_KEY");
+        String cleGemini = System.getenv("GEMINI_KEY");
+        String cleTavily = System.getenv("TAVILY_KEY");
 
         ChatModel model = GoogleAiGeminiChatModel.builder()
-                .apiKey(cle)
+                .apiKey(cleGemini)
                 .modelName("gemini-2.5-flash")
                 .temperature(0.7)
                 .logRequestsAndResponses(true)
                 .build();
 
         EmbeddingModel embeddingModel = GoogleAiEmbeddingModel.builder()
-                .apiKey(cle)
+                .apiKey(cleGemini)
                 .modelName("gemini-embedding-001")
                 .outputDimensionality(768)
                 .timeout(Duration.ofSeconds(60))
                 .build();
 
-        // ----- Phase 1 : ingestion du seul document rag.pdf -----
+        // ----- ContentRetriever 1 : le document PDF (RAG classique) -----
 
         ApacheTikaDocumentParser parser = new ApacheTikaDocumentParser();
         Document document = ClassPathDocumentLoader.loadDocument("rag.pdf", parser);
@@ -85,43 +84,27 @@ public class Test5 {
         EmbeddingStore<TextSegment> embeddingStore = new InMemoryEmbeddingStore<>();
         embeddingStore.addAll(embeddings, segments);
 
-        ContentRetriever contentRetriever = EmbeddingStoreContentRetriever.builder()
+        ContentRetriever contentRetrieverPdf = EmbeddingStoreContentRetriever.builder()
                 .embeddingStore(embeddingStore)
                 .embeddingModel(embeddingModel)
                 .maxResults(2)
                 .minScore(0.5)
                 .build();
 
-        // Template de prompt pour demander au LM si la question porte sur l'IA,
-        // avec un parametre "requete" pour la question posee par l'utilisateur.
-        PromptTemplate promptTemplate = PromptTemplate.from(
-                "Est-ce que la requete '{{requete}}' porte sur l'IA ? "
-                        + "Reponds seulement par 'oui', 'non', ou 'peut-etre'.");
+        // ----- ContentRetriever 2 : recherche sur le Web (Tavily) -----
 
-        // ----- Phase 2 : QueryRouter personnalise -----
+        WebSearchEngine webSearchEngine = TavilyWebSearchEngine.builder()
+                .apiKey(cleTavily)
+                .build();
 
-        // Classe interne locale qui implemente QueryRouter : demande au LLM si la
-        // question porte sur l'IA ; si non, aucun ContentRetriever n'est utilise (pas de RAG).
-        class QueryRouterPourEviterRag implements QueryRouter {
-            @Override
-            public java.util.Collection<ContentRetriever> route(Query query) {
-                Map<String, Object> variables = new HashMap<>();
-                variables.put("requete", query.text());
-                Prompt prompt = promptTemplate.apply(variables);
-                String reponse = model.chat(prompt.text());
-                System.out.println("[QueryRouter] Question posee au LM : " + prompt.text());
-                System.out.println("[QueryRouter] Reponse du LM : " + reponse);
+        ContentRetriever contentRetrieverWeb = WebSearchContentRetriever.builder()
+                .webSearchEngine(webSearchEngine)
+                .maxResults(3)
+                .build();
 
-                if (reponse.toLowerCase().contains("non")) {
-                    // Pas de RAG (aucun ContentRetriever utilise)
-                    return Collections.emptyList();
-                } else {
-                    return Collections.singletonList(contentRetriever);
-                }
-            }
-        }
+        // ----- QueryRouter : les 2 ContentRetrievers sont utilises systematiquement -----
 
-        QueryRouter queryRouter = new QueryRouterPourEviterRag();
+        QueryRouter queryRouter = new DefaultQueryRouter(contentRetrieverPdf, contentRetrieverWeb);
 
         RetrievalAugmentor retrievalAugmentor = DefaultRetrievalAugmentor.builder()
                 .queryRouter(queryRouter)
